@@ -36,7 +36,8 @@ class HttpConfig(TypedDict, total=False):
 class StoreIndexConfig(TypedDict, total=False):
     """Configuration for vector embeddings in store.
 
-    Enables semantic similarity search using pgvector.
+    Enables semantic similarity search using pgvector (Postgres) or
+    sqlite-vec (SQLite).
     See: https://github.com/ibbybuilds/aegra/issues/104
     """
 
@@ -47,6 +48,7 @@ class StoreIndexConfig(TypedDict, total=False):
     Examples:
     - openai:text-embedding-3-small (1536 dims)
     - openai:text-embedding-3-large (3072 dims)
+    - fastembed:BAAI/bge-small-en-v1.5 (384 dims) – local, no API key
     - bedrock:amazon.titan-embed-text-v2:0 (1024 dims)
     - cohere:embed-english-v3.0 (1024 dims)
     """
@@ -209,3 +211,27 @@ def get_config_dir() -> Path | None:
     if config_path and config_path.exists():
         return config_path.parent.resolve()
     return None
+
+
+def resolve_embed_config(index_config: dict) -> dict:
+    """Resolve ``fastembed:<model>`` shorthand to a ``FastEmbedEmbeddings`` instance.
+
+    If the ``embed`` value starts with ``fastembed:``, it is replaced with a
+    ``FastEmbedEmbeddings`` object from ``langchain-community``.  All other
+    values (``openai:…``, raw ``Embeddings`` instances, etc.) pass through
+    unchanged.
+
+    Args:
+        index_config: A mutable copy of the store index config dict.
+
+    Returns:
+        The (possibly mutated) config dict.
+    """
+    embed = index_config.get("embed")
+    if isinstance(embed, str) and embed.startswith("fastembed:"):
+        from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
+
+        model_name = embed.split(":", 1)[1]
+        logger.info("Using FastEmbed embeddings: model=%s", model_name)
+        index_config = {**index_config, "embed": FastEmbedEmbeddings(model_name=model_name)}
+    return index_config

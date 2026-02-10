@@ -37,9 +37,9 @@ class TestDatabaseManager:
         """
         with (
             patch("aegra_api.core.database.create_async_engine") as mock_create_engine,
-            patch("aegra_api.core.database.AsyncConnectionPool") as mock_pool_cls,
-            patch("aegra_api.core.database.AsyncPostgresSaver") as mock_saver_cls,
-            patch("aegra_api.core.database.AsyncPostgresStore") as mock_store_cls,
+            patch("psycopg_pool.AsyncConnectionPool") as mock_pool_cls,
+            patch("langgraph.checkpoint.postgres.aio.AsyncPostgresSaver") as mock_saver_cls,
+            patch("langgraph.store.postgres.aio.AsyncPostgresStore") as mock_store_cls,
             patch("aegra_api.core.database.load_store_config") as mock_load_store_config,
         ):
             # 1. Setup SQLAlchemy Engine Mock

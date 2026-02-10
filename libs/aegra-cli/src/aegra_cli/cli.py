@@ -314,8 +314,13 @@ def dev(
         # User specified a file but it doesn't exist (shouldn't happen due to click validation)
         console.print(f"[yellow]Warning: .env file not found: {env_file}[/yellow]")
 
-    # Check and start PostgreSQL unless disabled
-    if not no_db_check:
+    # Detect SQLite mode from DATABASE_URL
+    import os as _os
+
+    is_sqlite = _os.environ.get("DATABASE_URL", "").startswith("sqlite")
+
+    # Check and start PostgreSQL unless disabled or using SQLite
+    if not no_db_check and not is_sqlite:
         console.print()
 
         # Auto-generate docker-compose.yml if not specified and doesn't exist
@@ -335,12 +340,14 @@ def dev(
         console.print()
 
     # Build info panel content
+    db_label = f"SQLite ({_os.environ.get('DATABASE_URL', '')})" if is_sqlite else "PostgreSQL"
     info_lines = [
         "[bold green]Starting Aegra development server[/bold green]\n",
         f"[cyan]Host:[/cyan] {host}",
         f"[cyan]Port:[/cyan] {port}",
         f"[cyan]App:[/cyan] {app}",
         f"[cyan]Config:[/cyan] {resolved_config}",
+        f"[cyan]Database:[/cyan] {db_label}",
     ]
     if loaded_env:
         info_lines.append(f"[cyan]Env:[/cyan] {loaded_env}")
@@ -747,6 +754,71 @@ def down(compose_file: Path | None, volumes: bool, stop_all: bool, services: tup
     else:
         console.print("\n[bold red]Some services failed to stop.[/bold red]")
         sys.exit(1)
+
+
+@cli.command()
+@click.option(
+    "--name",
+    "-n",
+    default=None,
+    help="Project name (defaults to directory name).",
+)
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    help="Host to bind the server to.",
+    show_default=True,
+)
+@click.option(
+    "--port",
+    default=8000,
+    type=int,
+    help="Port to bind the server to.",
+    show_default=True,
+)
+@click.pass_context
+def minimal(ctx: click.Context, name: str | None, host: str, port: int) -> None:
+    """Initialize with SQLite and start the dev server in one command.
+
+    Combines 'aegra init --sqlite' and 'aegra dev' for a zero-dependency
+    local setup. No Docker, no PostgreSQL required.
+
+    Examples:
+
+        aegra minimal                       # Init + run with SQLite
+
+        aegra minimal -n "My Agent"         # Specify project name
+    """
+    import os
+
+    project_path = Path.cwd()
+    aegra_config = project_path / "aegra.json"
+
+    # Run init --sqlite if not already initialised
+    if not aegra_config.exists():
+        ctx.invoke(init, name=name, force=False, path=".", sqlite=True)
+        console.print()
+
+    # Auto-copy .env.example -> .env if missing
+    dot_env = project_path / ".env"
+    dot_env_example = project_path / ".env.example"
+    if not dot_env.exists() and dot_env_example.exists():
+        import shutil
+
+        shutil.copy2(dot_env_example, dot_env)
+        console.print(f"[cyan]Created[/cyan] {dot_env} [dim](copied from .env.example)[/dim]")
+
+    # Load .env so DATABASE_URL is available
+    load_env_file(dot_env if dot_env.exists() else None)
+
+    # Ensure DATABASE_URL is set for SQLite
+    if "DATABASE_URL" not in os.environ:
+        slug = get_project_slug(aegra_config)
+        os.environ["DATABASE_URL"] = f"sqlite:///./{slug}.db"
+        console.print(f"[dim]Set DATABASE_URL={os.environ['DATABASE_URL']}[/dim]")
+
+    # Delegate to dev command with --no-db-check (SQLite needs no Docker)
+    ctx.invoke(dev, host=host, port=port, no_db_check=True)
 
 
 # Register command groups and commands from the commands package

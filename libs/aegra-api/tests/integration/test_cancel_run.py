@@ -8,6 +8,7 @@ Addresses GitHub Issue #132: Cancel endpoint doesn't cancel asyncio task
 
 import asyncio
 import contextlib
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -129,9 +130,14 @@ class TestCancelRun:
             broker_manager._brokers = {}
         broker_manager._brokers[run_id] = broker
 
-        # Interrupt the run
-        result = await streaming_service.interrupt_run(run_id)
-        assert result is True
+        # Mock the event store session maker so signal_run_error doesn't hit the DB
+        mock_session = AsyncMock()
+        with patch("aegra_api.services.event_store._get_session_maker") as mock_es_session_maker:
+            mock_es_session_maker.return_value = lambda: mock_session
+
+            # Interrupt the run
+            result = await streaming_service.interrupt_run(run_id)
+            assert result is True
 
         with contextlib.suppress(TimeoutError, asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=1.0)
