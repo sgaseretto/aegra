@@ -178,12 +178,14 @@ class TestRunsStreamingEndpoints:
             patch("aegra_api.api.runs.update_run_status", new_callable=AsyncMock),
             patch("aegra_api.api.runs.set_thread_status", new_callable=AsyncMock),
             patch("aegra_api.api.runs._get_session_maker") as mock_session_maker,
+            patch("aegra_api.services.event_store._get_session_maker") as mock_es_session_maker,
         ):
             mock_graph = MagicMock()
             mock_lg_service.return_value.get_graph.return_value.__aenter__ = AsyncMock(return_value=mock_graph)
             mock_lg_service.return_value.get_graph.return_value.__aexit__ = AsyncMock(return_value=None)
 
             mock_session_maker.return_value = lambda: mock_session
+            mock_es_session_maker.return_value = lambda: mock_session
 
             # Execute should raise the error
             with pytest.raises(ValueError, match="Test error during streaming"):

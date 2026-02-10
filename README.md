@@ -30,7 +30,29 @@ Aegra is a drop-in replacement for LangGraph Platform. Use the same LangGraph SD
 
 ## 🚀 Quick Start
 
-### Using the CLI (Recommended)
+### SQLite Quick Start (No Docker Required)
+
+**Prerequisites:** Python 3.11+
+
+```bash
+pip install aegra-cli
+
+# Initialize and run with SQLite (zero external deps)
+aegra minimal
+```
+
+Or step-by-step:
+
+```bash
+aegra init --sqlite
+cp .env.example .env
+# Add your OPENAI_API_KEY to .env
+aegra dev
+```
+
+See [SQLite Guide](docs/sqlite.md) for details.
+
+### PostgreSQL Quick Start
 
 **Prerequisites:** Python 3.11+, Docker (for PostgreSQL)
 
@@ -85,7 +107,7 @@ async for chunk in client.runs.stream(
 | **Data Control** | Third-party hosted | Your infrastructure |
 | **Vendor Lock-in** | High dependency | Zero lock-in |
 | **Authentication** | Limited options | Custom (JWT/OAuth/Firebase) |
-| **Database** | Managed, no BYO | Bring your own Postgres |
+| **Database** | Managed, no BYO | PostgreSQL or SQLite |
 | **Tracing** | LangSmith only | Your choice (Langfuse, etc.) |
 | **SDK Compatibility** | LangGraph SDK | Same LangGraph SDK |
 
@@ -103,7 +125,9 @@ async for chunk in client.runs.stream(
 ## 🛠️ CLI Commands
 
 ```bash
-aegra init              # Initialize a new project
+aegra init              # Initialize a new project (PostgreSQL)
+aegra init --sqlite     # Initialize with SQLite backend
+aegra minimal           # Init with SQLite + start dev server
 
 aegra dev               # Start development server (hot reload)
 aegra up                # Start all services with Docker
@@ -125,6 +149,7 @@ aegra db history        # Show migration history
 | [Semantic Store](docs/semantic-store.md) | Vector embeddings with pgvector |
 | [Dependencies](docs/dependencies.md) | Shared modules for graph imports |
 | [Observability & Tracing](docs/observability.md) | Configure Langfuse, Phoenix, and generic OTLP exporters |
+| [SQLite Guide](docs/sqlite.md) | Zero-dependency local development with SQLite |
 | [Production Setup](docs/production-docker-setup.md) | Docker deployment for production |
 
 > ⚠️ **Upgrading from an older version?** See the [PostgreSQL 18 Migration Guide](docs/postgres-18-migration.md).
@@ -139,9 +164,9 @@ aegra db history        # Show migration history
 
 - [FastAPI](https://fastapi.tiangolo.com/) - HTTP layer
 - [LangGraph](https://github.com/langchain-ai/langgraph) - State management & graph execution
-- [PostgreSQL](https://www.postgresql.org/) - Persistence & checkpoints
+- [PostgreSQL](https://www.postgresql.org/) / [SQLite](https://www.sqlite.org/) - Persistence & checkpoints
 - [OpenTelemetry](https://opentelemetry.io/) - Observability standard
-- [pgvector](https://github.com/pgvector/pgvector) - Vector embeddings
+- [pgvector](https://github.com/pgvector/pgvector) / [sqlite-vec](https://github.com/asg017/sqlite-vec) - Vector embeddings
 
 ## 🤝 Contributing
 

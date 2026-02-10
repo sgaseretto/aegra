@@ -62,7 +62,7 @@ We use [Conventional Commits](https://www.conventionalcommits.org/) for clear an
 ### Scope (Optional)
 
 Use scope to specify which part of the codebase is affected:
-- `api`, `auth`, `graph`, `db`, `middleware`, `tests`, `docs`, `ci`
+- `api`, `auth`, `graph`, `db`, `sqlite`, `middleware`, `tests`, `docs`, `ci`
 
 ### Examples
 
@@ -160,6 +160,7 @@ uv run --package aegra-api pytest libs/aegra-api/tests/e2e/test_assistants/test_
 - Place end-to-end tests in `tests/e2e/`
 - Use descriptive test names: `test_should_return_error_when_invalid_input`
 - Aim for 80%+ code coverage
+- Database-related changes must work with both PostgreSQL and SQLite backends
 
 ## 🔒 Security
 

@@ -21,6 +21,10 @@ uv sync --all-packages
 # Start dev server (postgres + auto-migrations + hot reload)
 aegra dev
 
+# SQLite mode (no Docker/Postgres required)
+aegra init --sqlite     # Initialize with SQLite backend
+aegra minimal           # Init with SQLite + start dev server
+
 # Run tests
 uv run --package aegra-api pytest libs/aegra-api/tests/
 uv run --package aegra-cli pytest libs/aegra-cli/tests/
@@ -95,7 +99,7 @@ def process(items): ...
 
 ### Import Conventions
 - Use absolute imports with `aegra_api.*` prefix.
-- **ALWAYS place imports at the top of the file.** Never use inline/lazy imports inside functions unless there is a **proven circular dependency** (confirmed by actual `ImportError`) or the import is from an **optional dependency** that may not be installed (wrapped in `try/except ImportError`). "Might be slow" or "only used here" are NOT valid reasons for inline imports. If unsure, put it at the top — only move inline after confirming the import cycle with an actual error.
+- **ALWAYS place imports at the top of the file.** Never use inline/lazy imports inside functions unless there is a **proven circular dependency** (confirmed by actual `ImportError`), the import is from an **optional dependency** that may not be installed (wrapped in `try/except ImportError`), or the import is **backend-specific** and only needed in one code path (e.g. Postgres-only imports inside `_initialize_postgres()`). "Might be slow" or "only used here" are NOT valid reasons for inline imports. If unsure, put it at the top — only move inline after confirming the import cycle with an actual error.
 
 ### Error Handling
 - **NEVER use bare `except:` or `except Exception: pass`.** Always catch specific exceptions.
@@ -176,11 +180,28 @@ These rules exist because AI agents repeatedly make these mistakes. Follow them 
 ## Architecture
 
 ### Database Architecture
-The system uses two connection pools:
+Aegra supports two database backends, selected via `DATABASE_URL`:
+
+**PostgreSQL (default)** uses two connection pools:
 1. **SQLAlchemy Pool** (asyncpg driver) - Metadata tables: assistants, threads, runs
 2. **LangGraph Pool** (psycopg driver) - State checkpoints, vector embeddings
 
 **URL format:** LangGraph requires `postgresql://` while SQLAlchemy uses `postgresql+asyncpg://`
+
+**SQLite** (`DATABASE_URL=sqlite:///./app.db`) uses a single file:
+- Metadata tables via SQLAlchemy + aiosqlite
+- Checkpoints via `AsyncSqliteSaver` (from `langgraph-checkpoint-sqlite`)
+- Store via custom `AsyncSqliteStore` with sqlite-vec for vector search
+- Alembic is skipped; tables created via `Base.metadata.create_all()`
+
+### Cross-Backend Compatibility Rules
+All database code must work with both PostgreSQL and SQLite:
+- Use `PortableJSON` (not `JSONB`) in ORM models
+- Use `PortableDateTime` (not `DateTime(timezone=True)`) for timestamps
+- Use `func.now()` (not `text("now()")`) for server defaults
+- Use `default=_new_uuid` (not Postgres-specific server defaults)
+- Use SQLAlchemy ORM (not raw psycopg SQL) in services
+- No raw SQL dialect-specific queries
 
 ### Configuration
 **aegra.json** defines graphs, auth, HTTP config, and store settings. See `docs/configuration.md` for full reference.

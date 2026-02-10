@@ -1,64 +1,57 @@
-"""Unit tests for EventStore service"""
+"""Unit tests for EventStore service (SQLAlchemy ORM-based)."""
 
 import asyncio
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from aegra_api.core.orm import RunEvent
 from aegra_api.core.sse import SSEEvent
 from aegra_api.services.event_store import EventStore, store_sse_event
 
 
+def _make_mock_session() -> AsyncMock:
+    """Create a mock async session with context manager support."""
+    session = AsyncMock()
+    session.add = MagicMock()
+    return session
+
+
+def _make_mock_session_maker(session: AsyncMock) -> MagicMock:
+    """Create a mock session maker that yields the given session."""
+    maker = MagicMock()
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=session)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    maker.return_value = ctx
+    return maker
+
+
 class TestEventStore:
-    """Unit tests for EventStore class (Database interactions)"""
+    """Unit tests for EventStore class (SQLAlchemy ORM-based)."""
 
     @pytest.fixture
-    def mock_cursor(self):
-        """Mock database cursor"""
-        cursor = AsyncMock()
-        return cursor
-
-    @pytest.fixture
-    def mock_conn(self, mock_cursor):
-        """Mock database connection"""
-        # IMPORTANT: mock_conn must be a Mock (not AsyncMock) because .cursor()
-        # is a synchronous method that returns an asynchronous context manager.
-        conn = Mock()
-
-        # Configure .cursor() to return an object with __aenter__
-        cursor_ctx = Mock()
-        cursor_ctx.__aenter__ = AsyncMock(return_value=mock_cursor)
-        cursor_ctx.__aexit__ = AsyncMock(return_value=None)
-
-        conn.cursor.return_value = cursor_ctx
-        return conn
-
-    @pytest.fixture
-    def mock_pool(self, mock_conn):
-        """Mock Psycopg Connection Pool"""
-        # IMPORTANT: mock_pool must be a Mock (not AsyncMock) because .connection()
-        # is a synchronous method that returns an asynchronous context manager.
-        pool = Mock()
-
-        # Configure .connection() to return an object with __aenter__
-        connection_ctx = Mock()
-        connection_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
-        connection_ctx.__aexit__ = AsyncMock(return_value=None)
-
-        pool.connection.return_value = connection_ctx
-        return pool
-
-    @pytest.fixture
-    def event_store(self):
-        """Create EventStore instance"""
+    def event_store(self) -> EventStore:
+        """Create EventStore instance."""
         return EventStore()
 
+    @pytest.fixture
+    def mock_session(self) -> AsyncMock:
+        """Mock async session."""
+        return _make_mock_session()
+
+    @pytest.fixture
+    def mock_session_maker(self, mock_session: AsyncMock) -> MagicMock:
+        """Mock session maker returning mock_session."""
+        return _make_mock_session_maker(mock_session)
+
     @pytest.mark.asyncio
-    async def test_store_event_success(self, event_store, mock_pool, mock_cursor):
-        """Test successful event storage"""
-        # Setup
+    async def test_store_event_success(
+        self, event_store: EventStore, mock_session: AsyncMock, mock_session_maker: MagicMock
+    ) -> None:
+        """Test successful event storage."""
         run_id = "test-run-123"
         event = SSEEvent(
             id=f"{run_id}_event_1",
@@ -67,198 +60,194 @@ class TestEventStore:
             timestamp=datetime.now(UTC),
         )
 
-        with patch("aegra_api.services.event_store.db_manager") as mock_db_manager:
-            # Patch the shared lg_pool with our correctly configured mock
-            mock_db_manager.lg_pool = mock_pool
-
-            # Execute
+        with patch("aegra_api.services.event_store._get_session_maker", return_value=mock_session_maker):
             await event_store.store_event(run_id, event)
 
-            # Assert
-            mock_cursor.execute.assert_called_once()
+        # Verify session.add was called with a RunEvent
+        mock_session.add.assert_called_once()
+        row = mock_session.add.call_args[0][0]
+        assert isinstance(row, RunEvent)
+        assert row.id == event.id
+        assert row.run_id == run_id
+        assert row.seq == 1
+        assert row.event == event.event
+        assert row.data == event.data
 
-            # Verify the SQL call
-            call_args = mock_cursor.execute.call_args
-            assert len(call_args[0]) == 2  # statement and params
-            stmt, params = call_args[0]
-
-            # Check parameters
-            assert params["id"] == event.id
-            assert params["run_id"] == run_id
-            assert params["seq"] == 1
-            assert params["event"] == event.event
-
-            # Verify data adaptation for Jsonb (Psycopg 3 uses .obj attribute)
-            assert params["data"].obj == event.data
+        # Verify commit was called
+        mock_session.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_store_event_sequence_extraction_edge_cases(self, event_store, mock_pool, mock_cursor):
-        """Test sequence extraction from various event ID formats"""
-        with patch("aegra_api.services.event_store.db_manager") as mock_db_manager:
-            mock_db_manager.lg_pool = mock_pool
+    async def test_store_event_sequence_extraction_edge_cases(
+        self, event_store: EventStore, mock_session: AsyncMock, mock_session_maker: MagicMock
+    ) -> None:
+        """Test sequence extraction from various event ID formats."""
+        test_cases = [
+            ("run_123_event_42", 42),
+            ("simple_event_0", 0),
+            ("run_event_999", 999),
+            ("broken_format", 0),
+            ("run_event_", 0),
+        ]
 
-            test_cases = [
-                ("run_123_event_42", 42),
-                ("simple_event_0", 0),
-                ("run_event_999", 999),
-                ("broken_format", 0),
-                ("run_event_", 0),
-            ]
-
+        with patch("aegra_api.services.event_store._get_session_maker", return_value=mock_session_maker):
             for event_id, expected_seq in test_cases:
+                mock_session.add.reset_mock()
                 event = SSEEvent(id=event_id, event="test", data={})
                 await event_store.store_event("test-run", event)
 
-                call_args = mock_cursor.execute.call_args
-                params = call_args[0][1]
-                assert params["seq"] == expected_seq, f"Failed for event_id: {event_id}"
+                row = mock_session.add.call_args[0][0]
+                assert row.seq == expected_seq, f"Failed for event_id: {event_id}"
 
     @pytest.mark.asyncio
-    async def test_store_event_database_error(self, event_store, mock_pool, mock_cursor):
-        """Test handling of database errors during event storage"""
+    async def test_store_event_integrity_error(
+        self, event_store: EventStore, mock_session: AsyncMock, mock_session_maker: MagicMock
+    ) -> None:
+        """Test handling of duplicate event (IntegrityError)."""
+        from sqlalchemy.exc import IntegrityError
+
         event = SSEEvent(id="test_event_1", event="test", data={})
+        mock_session.commit.side_effect = IntegrityError("", {}, Exception())
 
-        with patch("aegra_api.services.event_store.db_manager") as mock_db_manager:
-            mock_db_manager.lg_pool = mock_pool
-            mock_cursor.execute.side_effect = RuntimeError("Database connection failed")
+        with patch("aegra_api.services.event_store._get_session_maker", return_value=mock_session_maker):
+            # Should not raise — IntegrityError is silently handled (ON CONFLICT DO NOTHING)
+            await event_store.store_event("test-run", event)
 
-            with pytest.raises(RuntimeError):
-                await event_store.store_event("test-run", event)
+        mock_session.rollback.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_get_events_since_success(self, event_store, mock_pool, mock_cursor):
-        """Test successful event retrieval with last_event_id"""
+    async def test_get_events_since_success(
+        self, event_store: EventStore, mock_session: AsyncMock, mock_session_maker: MagicMock
+    ) -> None:
+        """Test successful event retrieval with last_event_id."""
         run_id = "test-run-123"
         last_event_id = f"{run_id}_event_5"
 
-        # Mock result rows (as dicts because row_factory=dict_row)
-        mock_rows = [
-            {
-                "id": f"{run_id}_event_6",
-                "event": "event6",
-                "data": {"seq": 6},
-                "created_at": datetime.now(UTC),
-            },
-            {
-                "id": f"{run_id}_event_7",
-                "event": "event7",
-                "data": {"seq": 7},
-                "created_at": datetime.now(UTC),
-            },
-        ]
-        mock_cursor.fetchall.return_value = mock_rows
+        # Mock RunEvent rows
+        row1 = MagicMock(spec=RunEvent)
+        row1.id = f"{run_id}_event_6"
+        row1.event = "event6"
+        row1.data = {"seq": 6}
+        row1.created_at = datetime.now(UTC)
 
-        with patch("aegra_api.services.event_store.db_manager") as mock_db_manager:
-            mock_db_manager.lg_pool = mock_pool
+        row2 = MagicMock(spec=RunEvent)
+        row2.id = f"{run_id}_event_7"
+        row2.event = "event7"
+        row2.data = {"seq": 7}
+        row2.created_at = datetime.now(UTC)
 
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [row1, row2]
+        mock_session.execute.return_value = mock_result
+
+        with patch("aegra_api.services.event_store._get_session_maker", return_value=mock_session_maker):
             events = await event_store.get_events_since(run_id, last_event_id)
 
-            assert len(events) == 2
-            assert events[0].id == f"{run_id}_event_6"
-
-            call_args = mock_cursor.execute.call_args
-            params = call_args[0][1]
-            assert params["run_id"] == run_id
-            assert params["last_seq"] == 5
+        assert len(events) == 2
+        assert events[0].id == f"{run_id}_event_6"
+        assert events[1].id == f"{run_id}_event_7"
 
     @pytest.mark.asyncio
-    async def test_get_events_since_no_events(self, event_store, mock_pool, mock_cursor):
-        """Test retrieval when no events exist after last_event_id"""
-        mock_cursor.fetchall.return_value = []
+    async def test_get_events_since_no_events(
+        self, event_store: EventStore, mock_session: AsyncMock, mock_session_maker: MagicMock
+    ) -> None:
+        """Test retrieval when no events exist after last_event_id."""
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []
+        mock_session.execute.return_value = mock_result
 
-        with patch("aegra_api.services.event_store.db_manager") as mock_db_manager:
-            mock_db_manager.lg_pool = mock_pool
+        with patch("aegra_api.services.event_store._get_session_maker", return_value=mock_session_maker):
             events = await event_store.get_events_since("test-run", "test_event_1")
-            assert events == []
+
+        assert events == []
 
     @pytest.mark.asyncio
-    async def test_get_events_since_invalid_last_event_id(self, event_store, mock_pool, mock_cursor):
-        """Test handling of malformed last_event_id"""
-        mock_cursor.fetchall.return_value = []
-
-        with patch("aegra_api.services.event_store.db_manager") as mock_db_manager:
-            mock_db_manager.lg_pool = mock_pool
-            await event_store.get_events_since("test-run", "malformed_id")
-
-            call_args = mock_cursor.execute.call_args
-            params = call_args[0][1]
-            assert params["last_seq"] == -1
-
-    @pytest.mark.asyncio
-    async def test_get_all_events_success(self, event_store, mock_pool, mock_cursor):
-        """Test successful retrieval of all events for a run"""
+    async def test_get_all_events_success(
+        self, event_store: EventStore, mock_session: AsyncMock, mock_session_maker: MagicMock
+    ) -> None:
+        """Test successful retrieval of all events for a run."""
         run_id = "test-run-123"
-        mock_rows = [
-            {
-                "id": f"{run_id}_event_1",
-                "event": "start",
-                "data": {"type": "start"},
-                "created_at": datetime.now(UTC),
-            },
-        ]
-        mock_cursor.fetchall.return_value = mock_rows
 
-        with patch("aegra_api.services.event_store.db_manager") as mock_db_manager:
-            mock_db_manager.lg_pool = mock_pool
+        row = MagicMock(spec=RunEvent)
+        row.id = f"{run_id}_event_1"
+        row.event = "start"
+        row.data = {"type": "start"}
+        row.created_at = datetime.now(UTC)
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [row]
+        mock_session.execute.return_value = mock_result
+
+        with patch("aegra_api.services.event_store._get_session_maker", return_value=mock_session_maker):
             events = await event_store.get_all_events(run_id)
-            assert len(events) == 1
-            assert events[0].event == "start"
+
+        assert len(events) == 1
+        assert events[0].event == "start"
 
     @pytest.mark.asyncio
-    async def test_cleanup_events_success(self, event_store, mock_pool, mock_cursor):
-        """Test successful event cleanup for a specific run"""
-        run_id = "test-run-123"
-        with patch("aegra_api.services.event_store.db_manager") as mock_db_manager:
-            mock_db_manager.lg_pool = mock_pool
-            await event_store.cleanup_events(run_id)
+    async def test_cleanup_events_success(
+        self, event_store: EventStore, mock_session: AsyncMock, mock_session_maker: MagicMock
+    ) -> None:
+        """Test successful event cleanup for a specific run."""
+        with patch("aegra_api.services.event_store._get_session_maker", return_value=mock_session_maker):
+            await event_store.cleanup_events("test-run-123")
 
-            call_args = mock_cursor.execute.call_args
-            params = call_args[0][1]
-            assert params["run_id"] == run_id
+        mock_session.execute.assert_awaited_once()
+        mock_session.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_get_run_info_success(self, event_store, mock_pool, mock_cursor):
-        """Test successful retrieval of run information"""
+    async def test_get_run_info_success(
+        self, event_store: EventStore, mock_session: AsyncMock, mock_session_maker: MagicMock
+    ) -> None:
+        """Test successful retrieval of run information."""
         run_id = "test-run-123"
-        # Mock sequence range query
-        mock_range_result = {"last_seq": 5, "first_seq": 1}
-        # Mock last event query
-        mock_last_result = {"id": f"{run_id}_event_5", "created_at": datetime.now(UTC)}
 
-        mock_cursor.fetchone.side_effect = [mock_range_result, mock_last_result]
+        # Mock the sequence range query result
+        range_row = MagicMock()
+        range_row.first_seq = 1
+        range_row.last_seq = 5
 
-        with patch("aegra_api.services.event_store.db_manager") as mock_db_manager:
-            mock_db_manager.lg_pool = mock_pool
+        # Mock the last event query result
+        last_row = MagicMock()
+        last_row.id = f"{run_id}_event_5"
+        last_row.created_at = datetime.now(UTC)
+
+        # Two execute calls: first for range, second for last event
+        range_result = MagicMock()
+        range_result.one_or_none.return_value = range_row
+
+        last_result = MagicMock()
+        last_result.one_or_none.return_value = last_row
+
+        mock_session.execute.side_effect = [range_result, last_result]
+
+        with patch("aegra_api.services.event_store._get_session_maker", return_value=mock_session_maker):
             info = await event_store.get_run_info(run_id)
 
-            assert info is not None
-            assert info["event_count"] == 5
+        assert info is not None
+        assert info["event_count"] == 5
+        assert info["last_event_id"] == f"{run_id}_event_5"
 
     @pytest.mark.asyncio
-    async def test_get_run_info_no_events(self, event_store, mock_pool, mock_cursor):
-        """Test run info when no events exist"""
-        mock_cursor.fetchone.return_value = None
-        with patch("aegra_api.services.event_store.db_manager") as mock_db_manager:
-            mock_db_manager.lg_pool = mock_pool
+    async def test_get_run_info_no_events(
+        self, event_store: EventStore, mock_session: AsyncMock, mock_session_maker: MagicMock
+    ) -> None:
+        """Test run info when no events exist."""
+        range_row = MagicMock()
+        range_row.last_seq = None
+
+        range_result = MagicMock()
+        range_result.one_or_none.return_value = range_row
+
+        mock_session.execute.return_value = range_result
+
+        with patch("aegra_api.services.event_store._get_session_maker", return_value=mock_session_maker):
             info = await event_store.get_run_info("empty-run")
-            assert info is None
+
+        assert info is None
 
     @pytest.mark.asyncio
-    async def test_get_run_info_single_event(self, event_store, mock_pool, mock_cursor):
-        """Test run info with single event"""
-        mock_range_result = {"last_seq": 1, "first_seq": None}
-        mock_last_result = {"id": "run_event_1", "created_at": datetime.now(UTC)}
-        mock_cursor.fetchone.side_effect = [mock_range_result, mock_last_result]
-
-        with patch("aegra_api.services.event_store.db_manager") as mock_db_manager:
-            mock_db_manager.lg_pool = mock_pool
-            info = await event_store.get_run_info("single-event-run")
-            assert info is not None
-            assert info["event_count"] == 0
-
-    @pytest.mark.asyncio
-    async def test_cleanup_task_management(self, event_store):
-        """Test cleanup task start and stop functionality"""
+    async def test_cleanup_task_management(self, event_store: EventStore) -> None:
+        """Test cleanup task start and stop functionality."""
         assert event_store._cleanup_task is None
         await event_store.start_cleanup_task()
         assert event_store._cleanup_task is not None
@@ -266,33 +255,32 @@ class TestEventStore:
         assert event_store._cleanup_task.done()
 
     @pytest.mark.asyncio
-    async def test_cleanup_loop_functionality(self, event_store, mock_pool, mock_cursor):
-        """Test the cleanup loop functionality"""
+    async def test_cleanup_loop_functionality(
+        self, event_store: EventStore, mock_session: AsyncMock, mock_session_maker: MagicMock
+    ) -> None:
+        """Test the cleanup loop functionality."""
         with (
             patch.object(event_store, "CLEANUP_INTERVAL", 0.01),
-            patch("aegra_api.services.event_store.db_manager") as mock_db_manager,
+            patch("aegra_api.services.event_store._get_session_maker", return_value=mock_session_maker),
         ):
-            mock_db_manager.lg_pool = mock_pool
-
-            # Start and then wait a bit to allow the loop to run
             await event_store.start_cleanup_task()
             await asyncio.sleep(0.05)
             await event_store.stop_cleanup_task()
 
-        assert mock_cursor.execute.called, "Cleanup loop did not execute SQL"
+        assert mock_session.execute.called, "Cleanup loop did not execute SQL"
 
 
 class TestStoreSSEEvent:
-    """Unit tests for store_sse_event helper function"""
+    """Unit tests for store_sse_event helper function."""
 
     @pytest.fixture
-    def mock_event_store(self):
-        """Mock EventStore instance"""
+    def mock_event_store(self) -> Mock:
+        """Mock EventStore instance."""
         return Mock()
 
     @pytest.mark.asyncio
-    async def test_store_sse_event_success(self, mock_event_store):
-        """Test successful SSE event storage"""
+    async def test_store_sse_event_success(self, mock_event_store: Mock) -> None:
+        """Test successful SSE event storage."""
         mock_event_store.store_event = AsyncMock()
 
         with patch("aegra_api.services.event_store.event_store", mock_event_store):
@@ -322,8 +310,8 @@ class TestStoreSSEEvent:
             assert result == stored_event
 
     @pytest.mark.asyncio
-    async def test_store_sse_event_json_serialization(self):
-        """Test that complex objects are properly JSON serialized"""
+    async def test_store_sse_event_json_serialization(self) -> None:
+        """Test that complex objects are properly JSON serialized."""
         with patch("aegra_api.services.event_store.event_store") as mock_event_store:
             mock_event_store.store_event = AsyncMock()
 
@@ -348,15 +336,15 @@ class TestStoreSSEEvent:
             assert parsed_back["normal"] == "string"
 
     @pytest.mark.asyncio
-    async def test_store_sse_event_serialization_fallback(self):
-        """Test fallback behavior when JSON serialization fails"""
+    async def test_store_sse_event_serialization_fallback(self) -> None:
+        """Test fallback behavior when JSON serialization fails."""
         with patch("aegra_api.services.event_store.event_store") as mock_event_store:
             mock_event_store.store_event = AsyncMock()
 
             # Create an object that can't be serialized even with custom serializer
             # by making the serializer itself fail
             class UnserializableClass:
-                def __str__(self):
+                def __str__(self) -> str:
                     # Make str() fail to force the fallback
                     raise RuntimeError("Cannot stringify")
 

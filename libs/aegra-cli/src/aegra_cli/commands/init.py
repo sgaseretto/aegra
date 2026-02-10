@@ -40,7 +40,7 @@ def get_aegra_config(project_name: str, slug: str) -> dict:
 
 
 def get_env_example(slug: str) -> str:
-    """Generate .env.example content."""
+    """Generate .env.example content for Postgres mode."""
     return f"""\
 # PostgreSQL Configuration
 POSTGRES_USER={slug}
@@ -52,6 +52,32 @@ POSTGRES_DB={slug}
 # Options: noop, api_key, jwt
 AUTH_TYPE=noop
 """
+
+
+def get_env_example_sqlite(slug: str) -> str:
+    """Generate .env.example content for SQLite mode."""
+    return f"""\
+# SQLite Configuration (no Docker required)
+DATABASE_URL=sqlite:///./{slug}.db
+
+# Authentication Type
+# Options: noop, api_key, jwt
+AUTH_TYPE=noop
+"""
+
+
+def get_aegra_config_sqlite(project_name: str, slug: str) -> dict:
+    """Generate aegra.json config content for SQLite mode (with store config)."""
+    return {
+        "name": project_name,
+        "graphs": {slug: f"./graphs/{slug}/graph.py:graph"},
+        "store": {
+            "index": {
+                "embed": "fastembed:BAAI/bge-small-en-v1.5",
+                "dims": 384,
+            }
+        },
+    }
 
 
 def get_example_graph(project_name: str) -> str:
@@ -223,23 +249,30 @@ def write_file(path: Path, content: str, force: bool) -> bool:
 )
 @click.option("--force", is_flag=True, help="Overwrite existing files")
 @click.option("--path", type=click.Path(), default=".", help="Project directory")
-def init(name: str | None, force: bool, path: str) -> None:
+@click.option(
+    "--sqlite",
+    is_flag=True,
+    default=False,
+    help="Use SQLite backend (no Docker/Postgres required).",
+)
+def init(name: str | None, force: bool, path: str, sqlite: bool) -> None:
     """Initialize a new Aegra project.
 
     Creates the necessary configuration files and directory structure
-    for a new Aegra project, including:
+    for a new Aegra project.
 
     \b
-    - aegra.json: Graph configuration with project name
-    - .env.example: Environment variable template
-    - graphs/<name>/graph.py: Example graph implementation
-    - docker-compose.yml: Docker Compose for PostgreSQL (dev)
-    - docker-compose.prod.yml: Docker Compose for full stack (prod)
-    - Dockerfile: Production container build
+    Postgres mode (default):
+    - aegra.json, .env.example, docker-compose files, Dockerfile
+    SQLite mode (--sqlite):
+    - aegra.json (with store config), .env.example (with DATABASE_URL)
+    - No Docker files generated
 
     Examples:
 
-        aegra init                          # Use directory name as project name
+        aegra init                          # Postgres mode (default)
+
+        aegra init --sqlite                 # SQLite mode (no Docker)
 
         aegra init --name "My AI Agent"     # Specify project name
 
@@ -247,14 +280,14 @@ def init(name: str | None, force: bool, path: str) -> None:
     """
     project_path = Path(path).resolve()
 
-    # Determine project name - use provided name, or directory name
     if name is None:
         name = project_path.name
     slug = slugify(name)
 
+    mode_label = "SQLite" if sqlite else "PostgreSQL"
     console.print(
         Panel.fit(
-            f"[bold blue]Initializing Aegra project[/bold blue]\n\n"
+            f"[bold blue]Initializing Aegra project ({mode_label})[/bold blue]\n\n"
             f"[cyan]Name:[/cyan] {name}\n"
             f"[cyan]Path:[/cyan] {project_path}",
             border_style="blue",
@@ -267,7 +300,11 @@ def init(name: str | None, force: bool, path: str) -> None:
 
     # Create aegra.json
     aegra_config_path = project_path / "aegra.json"
-    aegra_config_content = json.dumps(get_aegra_config(name, slug), indent=2) + "\n"
+    if sqlite:
+        config_dict = get_aegra_config_sqlite(name, slug)
+    else:
+        config_dict = get_aegra_config(name, slug)
+    aegra_config_content = json.dumps(config_dict, indent=2) + "\n"
     if write_file(aegra_config_path, aegra_config_content, force):
         files_created += 1
     else:
@@ -275,7 +312,8 @@ def init(name: str | None, force: bool, path: str) -> None:
 
     # Create .env.example
     env_example_path = project_path / ".env.example"
-    if write_file(env_example_path, get_env_example(slug), force):
+    env_content = get_env_example_sqlite(slug) if sqlite else get_env_example(slug)
+    if write_file(env_example_path, env_content, force):
         files_created += 1
     else:
         files_skipped += 1
@@ -300,33 +338,31 @@ def init(name: str | None, force: bool, path: str) -> None:
     else:
         files_skipped += 1
 
-    # Create Docker files (always included — PostgreSQL is required)
-    # Development docker-compose (postgres only)
-    docker_compose_dev_path = project_path / "docker-compose.yml"
-    if write_file(docker_compose_dev_path, get_docker_compose_dev(slug), force):
-        files_created += 1
-    else:
-        files_skipped += 1
+    # Docker files only for Postgres mode
+    if not sqlite:
+        docker_compose_dev_path = project_path / "docker-compose.yml"
+        if write_file(docker_compose_dev_path, get_docker_compose_dev(slug), force):
+            files_created += 1
+        else:
+            files_skipped += 1
 
-    # Production docker-compose (full stack)
-    docker_compose_prod_path = project_path / "docker-compose.prod.yml"
-    if write_file(docker_compose_prod_path, get_docker_compose_prod(slug), force):
-        files_created += 1
-    else:
-        files_skipped += 1
+        docker_compose_prod_path = project_path / "docker-compose.prod.yml"
+        if write_file(docker_compose_prod_path, get_docker_compose_prod(slug), force):
+            files_created += 1
+        else:
+            files_skipped += 1
 
-    # Dockerfile for production builds
-    dockerfile_path = project_path / "Dockerfile"
-    if write_file(dockerfile_path, get_dockerfile(), force):
-        files_created += 1
-    else:
-        files_skipped += 1
+        dockerfile_path = project_path / "Dockerfile"
+        if write_file(dockerfile_path, get_dockerfile(), force):
+            files_created += 1
+        else:
+            files_skipped += 1
 
     # Print summary
     console.print()
     console.print(
         Panel.fit(
-            f"[bold green]Project '{name}' initialized![/bold green]\n\n"
+            f"[bold green]Project '{name}' initialized! ({mode_label})[/bold green]\n\n"
             f"[green]{files_created}[/green] files created"
             + (f", [yellow]{files_skipped}[/yellow] files skipped" if files_skipped else ""),
             border_style="green",
@@ -339,8 +375,18 @@ def init(name: str | None, force: bool, path: str) -> None:
     console.print("  1. Copy [cyan].env.example[/cyan] to [cyan].env[/cyan] and configure")
     console.print("  2. Edit [cyan]aegra.json[/cyan] to add your graphs")
     console.print("  3. Run [cyan]aegra dev[/cyan] to start the server")
-    console.print()
-    console.print("[bold]Docker:[/bold]")
-    console.print("  [cyan]aegra dev[/cyan]  - Start postgres + local dev server")
-    console.print("  [cyan]aegra up[/cyan]   - Start all services in Docker")
-    console.print("  [cyan]aegra down[/cyan] - Stop all services")
+
+    if sqlite:
+        console.print()
+        console.print("[bold]SQLite mode:[/bold]")
+        console.print("  [cyan]aegra dev[/cyan]      - Start server (no Docker needed)")
+        console.print("  [cyan]aegra minimal[/cyan]  - Init + dev in one command")
+        console.print()
+        console.print(f"  [dim]Database: ./{slug}.db[/dim]")
+        console.print("  [dim]Embeddings: FastEmbed (BAAI/bge-small-en-v1.5, local)[/dim]")
+    else:
+        console.print()
+        console.print("[bold]Docker:[/bold]")
+        console.print("  [cyan]aegra dev[/cyan]  - Start postgres + local dev server")
+        console.print("  [cyan]aegra up[/cyan]   - Start all services in Docker")
+        console.print("  [cyan]aegra down[/cyan] - Stop all services")

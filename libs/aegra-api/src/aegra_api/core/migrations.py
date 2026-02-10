@@ -92,5 +92,14 @@ async def run_migrations_async() -> None:
 
     Wraps the synchronous migration in a thread executor because Alembic's
     env.py uses asyncio.run() internally, which requires its own event loop.
+
+    For SQLite mode, migrations are skipped entirely – tables are created
+    via ``Base.metadata.create_all()`` in ``DatabaseManager._initialize_sqlite()``.
     """
+    from aegra_api.settings import settings
+
+    if settings.db.is_sqlite:
+        logger.info("SQLite mode: tables created via create_all (skipping Alembic)")
+        return
+
     await asyncio.to_thread(run_migrations)

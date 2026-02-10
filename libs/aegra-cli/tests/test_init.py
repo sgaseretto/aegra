@@ -11,10 +11,12 @@ from click.testing import CliRunner
 from aegra_cli.cli import cli
 from aegra_cli.commands.init import (
     get_aegra_config,
+    get_aegra_config_sqlite,
     get_docker_compose_dev,
     get_docker_compose_prod,
     get_dockerfile,
     get_env_example,
+    get_env_example_sqlite,
     get_example_graph,
     slugify,
 )
@@ -438,3 +440,103 @@ class TestInitTemplates:
         assert "pip install" in dockerfile
         assert "aegra" in dockerfile
         assert '"aegra"' in dockerfile  # CMD uses JSON array format
+
+
+class TestInitSqliteCommand:
+    """Tests for the init --sqlite command."""
+
+    def test_init_sqlite_creates_aegra_json(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        """Test that init --sqlite creates aegra.json with store config."""
+        with cli_runner.isolated_filesystem(temp_dir=tmp_path):
+            result = cli_runner.invoke(cli, ["init", "--sqlite"])
+
+            assert result.exit_code == 0
+            assert Path("aegra.json").exists()
+
+            content = json.loads(Path("aegra.json").read_text())
+            assert "graphs" in content
+            assert "store" in content
+            assert "index" in content["store"]
+            assert "fastembed:" in content["store"]["index"]["embed"]
+
+    def test_init_sqlite_creates_env_example_with_database_url(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Test that init --sqlite creates .env.example with DATABASE_URL."""
+        with cli_runner.isolated_filesystem(temp_dir=tmp_path):
+            result = cli_runner.invoke(cli, ["init", "--sqlite", "-n", "myapp"])
+
+            assert result.exit_code == 0
+            assert Path(".env.example").exists()
+
+            content = Path(".env.example").read_text()
+            assert "DATABASE_URL" in content
+            assert "sqlite:///" in content
+            # Should NOT have Postgres vars
+            assert "POSTGRES_USER" not in content
+            assert "POSTGRES_PASSWORD" not in content
+
+    def test_init_sqlite_skips_docker_files(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        """Test that init --sqlite does NOT create Docker files."""
+        with cli_runner.isolated_filesystem(temp_dir=tmp_path):
+            result = cli_runner.invoke(cli, ["init", "--sqlite"])
+
+            assert result.exit_code == 0
+            assert not Path("docker-compose.yml").exists()
+            assert not Path("docker-compose.prod.yml").exists()
+            assert not Path("Dockerfile").exists()
+
+    def test_init_sqlite_creates_graph_files(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        """Test that init --sqlite still creates example graph."""
+        with cli_runner.isolated_filesystem(temp_dir=tmp_path):
+            result = cli_runner.invoke(cli, ["init", "--sqlite", "-n", "test_agent"])
+
+            assert result.exit_code == 0
+            assert Path("graphs/test_agent/graph.py").exists()
+
+    def test_init_sqlite_shows_sqlite_next_steps(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Test that init --sqlite shows SQLite-specific next steps."""
+        with cli_runner.isolated_filesystem(temp_dir=tmp_path):
+            result = cli_runner.invoke(cli, ["init", "--sqlite"])
+
+            assert result.exit_code == 0
+            assert "SQLite" in result.output
+
+    def test_init_sqlite_help_shows_flag(self, cli_runner: CliRunner) -> None:
+        """Test that --sqlite flag appears in init --help."""
+        result = cli_runner.invoke(cli, ["init", "--help"])
+
+        assert result.exit_code == 0
+        assert "--sqlite" in result.output
+
+
+class TestInitSqliteTemplates:
+    """Tests for SQLite-specific template functions."""
+
+    def test_get_env_example_sqlite_has_database_url(self) -> None:
+        """Test that SQLite .env.example has DATABASE_URL."""
+        env = get_env_example_sqlite("myapp")
+        assert "DATABASE_URL" in env
+        assert "sqlite:///" in env
+        assert "myapp" in env
+
+    def test_get_env_example_sqlite_no_postgres_vars(self) -> None:
+        """Test that SQLite .env.example has no Postgres vars."""
+        env = get_env_example_sqlite("myapp")
+        assert "POSTGRES" not in env
+
+    def test_get_aegra_config_sqlite_has_store_config(self) -> None:
+        """Test that SQLite aegra.json includes store/index config."""
+        config = get_aegra_config_sqlite("My App", "my_app")
+        assert "store" in config
+        assert "index" in config["store"]
+        assert "embed" in config["store"]["index"]
+        assert "dims" in config["store"]["index"]
+
+    def test_get_aegra_config_sqlite_has_graphs(self) -> None:
+        """Test that SQLite aegra.json still has graphs section."""
+        config = get_aegra_config_sqlite("My App", "my_app")
+        assert "graphs" in config
+        assert "my_app" in config["graphs"]
