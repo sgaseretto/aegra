@@ -79,17 +79,21 @@ class TestAsyncSqliteStoreCRUD:
     async def test_batch_multiple_ops(self, store: AsyncSqliteStore) -> None:
         """Multiple operations in a single batch should all execute."""
         ns = ("batch",)
-        await store.abatch([
-            PutOp(namespace=ns, key="a", value={"v": 1}),
-            PutOp(namespace=ns, key="b", value={"v": 2}),
-            PutOp(namespace=ns, key="c", value={"v": 3}),
-        ])
+        await store.abatch(
+            [
+                PutOp(namespace=ns, key="a", value={"v": 1}),
+                PutOp(namespace=ns, key="b", value={"v": 2}),
+                PutOp(namespace=ns, key="c", value={"v": 3}),
+            ]
+        )
 
-        results = await store.abatch([
-            GetOp(namespace=ns, key="a"),
-            GetOp(namespace=ns, key="b"),
-            GetOp(namespace=ns, key="c"),
-        ])
+        results = await store.abatch(
+            [
+                GetOp(namespace=ns, key="a"),
+                GetOp(namespace=ns, key="b"),
+                GetOp(namespace=ns, key="c"),
+            ]
+        )
 
         assert results[0].value == {"v": 1}
         assert results[1].value == {"v": 2}
@@ -102,15 +106,19 @@ class TestAsyncSqliteStoreSearch:
     @pytest.mark.asyncio
     async def test_search_by_namespace_prefix(self, store: AsyncSqliteStore) -> None:
         """Search should return items matching namespace prefix."""
-        await store.abatch([
-            PutOp(namespace=("docs", "public"), key="d1", value={"title": "Doc 1"}),
-            PutOp(namespace=("docs", "private"), key="d2", value={"title": "Doc 2"}),
-            PutOp(namespace=("other",), key="o1", value={"title": "Other"}),
-        ])
+        await store.abatch(
+            [
+                PutOp(namespace=("docs", "public"), key="d1", value={"title": "Doc 1"}),
+                PutOp(namespace=("docs", "private"), key="d2", value={"title": "Doc 2"}),
+                PutOp(namespace=("other",), key="o1", value={"title": "Other"}),
+            ]
+        )
 
-        results = await store.abatch([
-            SearchOp(namespace_prefix=("docs",), filter=None, limit=10, offset=0),
-        ])
+        results = await store.abatch(
+            [
+                SearchOp(namespace_prefix=("docs",), filter=None, limit=10, offset=0),
+            ]
+        )
 
         items = results[0]
         assert len(items) == 2
@@ -121,15 +129,19 @@ class TestAsyncSqliteStoreSearch:
     async def test_search_with_filter(self, store: AsyncSqliteStore) -> None:
         """Search should apply filter conditions."""
         ns = ("items",)
-        await store.abatch([
-            PutOp(namespace=ns, key="a", value={"status": "active", "score": 10}),
-            PutOp(namespace=ns, key="b", value={"status": "inactive", "score": 20}),
-            PutOp(namespace=ns, key="c", value={"status": "active", "score": 30}),
-        ])
+        await store.abatch(
+            [
+                PutOp(namespace=ns, key="a", value={"status": "active", "score": 10}),
+                PutOp(namespace=ns, key="b", value={"status": "inactive", "score": 20}),
+                PutOp(namespace=ns, key="c", value={"status": "active", "score": 30}),
+            ]
+        )
 
-        results = await store.abatch([
-            SearchOp(namespace_prefix=ns, filter={"status": "active"}, limit=10, offset=0),
-        ])
+        results = await store.abatch(
+            [
+                SearchOp(namespace_prefix=ns, filter={"status": "active"}, limit=10, offset=0),
+            ]
+        )
 
         items = results[0]
         assert len(items) == 2
@@ -143,9 +155,11 @@ class TestAsyncSqliteStoreSearch:
         for i in range(5):
             await store.abatch([PutOp(namespace=ns, key=f"k{i}", value={"idx": i})])
 
-        results = await store.abatch([
-            SearchOp(namespace_prefix=ns, filter=None, limit=2, offset=1),
-        ])
+        results = await store.abatch(
+            [
+                SearchOp(namespace_prefix=ns, filter=None, limit=2, offset=1),
+            ]
+        )
 
         items = results[0]
         assert len(items) == 2
@@ -153,14 +167,18 @@ class TestAsyncSqliteStoreSearch:
     @pytest.mark.asyncio
     async def test_search_empty_prefix_returns_all(self, store: AsyncSqliteStore) -> None:
         """Empty namespace prefix should match all items."""
-        await store.abatch([
-            PutOp(namespace=("a",), key="1", value={"v": 1}),
-            PutOp(namespace=("b",), key="2", value={"v": 2}),
-        ])
+        await store.abatch(
+            [
+                PutOp(namespace=("a",), key="1", value={"v": 1}),
+                PutOp(namespace=("b",), key="2", value={"v": 2}),
+            ]
+        )
 
-        results = await store.abatch([
-            SearchOp(namespace_prefix=(), filter=None, limit=10, offset=0),
-        ])
+        results = await store.abatch(
+            [
+                SearchOp(namespace_prefix=(), filter=None, limit=10, offset=0),
+            ]
+        )
 
         assert len(results[0]) == 2
 
@@ -171,15 +189,19 @@ class TestAsyncSqliteStoreListNamespaces:
     @pytest.mark.asyncio
     async def test_list_namespaces(self, store: AsyncSqliteStore) -> None:
         """Should return all distinct namespaces."""
-        await store.abatch([
-            PutOp(namespace=("users", "admin"), key="u1", value={"n": 1}),
-            PutOp(namespace=("users", "guest"), key="u2", value={"n": 2}),
-            PutOp(namespace=("logs",), key="l1", value={"n": 3}),
-        ])
+        await store.abatch(
+            [
+                PutOp(namespace=("users", "admin"), key="u1", value={"n": 1}),
+                PutOp(namespace=("users", "guest"), key="u2", value={"n": 2}),
+                PutOp(namespace=("logs",), key="l1", value={"n": 3}),
+            ]
+        )
 
-        results = await store.abatch([
-            ListNamespacesOp(match_conditions=None, max_depth=None, limit=100, offset=0),
-        ])
+        results = await store.abatch(
+            [
+                ListNamespacesOp(match_conditions=None, max_depth=None, limit=100, offset=0),
+            ]
+        )
 
         namespaces = results[0]
         assert ("logs",) in namespaces
@@ -189,15 +211,19 @@ class TestAsyncSqliteStoreListNamespaces:
     @pytest.mark.asyncio
     async def test_list_namespaces_with_max_depth(self, store: AsyncSqliteStore) -> None:
         """max_depth should truncate namespaces to the given depth."""
-        await store.abatch([
-            PutOp(namespace=("a", "b", "c"), key="k1", value={"v": 1}),
-            PutOp(namespace=("a", "b", "d"), key="k2", value={"v": 2}),
-            PutOp(namespace=("x", "y"), key="k3", value={"v": 3}),
-        ])
+        await store.abatch(
+            [
+                PutOp(namespace=("a", "b", "c"), key="k1", value={"v": 1}),
+                PutOp(namespace=("a", "b", "d"), key="k2", value={"v": 2}),
+                PutOp(namespace=("x", "y"), key="k3", value={"v": 3}),
+            ]
+        )
 
-        results = await store.abatch([
-            ListNamespacesOp(match_conditions=None, max_depth=2, limit=100, offset=0),
-        ])
+        results = await store.abatch(
+            [
+                ListNamespacesOp(match_conditions=None, max_depth=2, limit=100, offset=0),
+            ]
+        )
 
         namespaces = results[0]
         # ("a", "b", "c") and ("a", "b", "d") should both truncate to ("a", "b")
@@ -210,13 +236,17 @@ class TestAsyncSqliteStoreListNamespaces:
     async def test_list_namespaces_with_offset_limit(self, store: AsyncSqliteStore) -> None:
         """Offset and limit should paginate namespace results."""
         for i in range(5):
-            await store.abatch([
-                PutOp(namespace=(f"ns{i}",), key="k", value={"v": i}),
-            ])
+            await store.abatch(
+                [
+                    PutOp(namespace=(f"ns{i}",), key="k", value={"v": i}),
+                ]
+            )
 
-        results = await store.abatch([
-            ListNamespacesOp(match_conditions=None, max_depth=None, limit=2, offset=1),
-        ])
+        results = await store.abatch(
+            [
+                ListNamespacesOp(match_conditions=None, max_depth=None, limit=2, offset=1),
+            ]
+        )
 
         namespaces = results[0]
         assert len(namespaces) == 2
